@@ -62,7 +62,7 @@ async def list_announcements(admin: CurrentAdmin):
     return [_serialize(d) for d in docs]
 
 
-@router.post("/", status_code=201)
+@router.post("", status_code=201)
 async def create_announcement(body: AnnouncementCreate, admin: CurrentAdmin):
     db = get_db()
     announcement = Announcement(
