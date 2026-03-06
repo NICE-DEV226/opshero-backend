@@ -1,5 +1,7 @@
 from functools import lru_cache
-from pydantic import Field, computed_field
+from typing import Union
+import json
+from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -17,6 +19,18 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
     allowed_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v: Union[str, list]) -> list[str]:
+        """Parse ALLOWED_ORIGINS from JSON string or list."""
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                # Fallback: split by comma
+                return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     @computed_field
     @property
