@@ -23,11 +23,20 @@ def _send_sync(to: str, subject: str, html: str, text: str) -> None:
     msg["To"]      = to
     msg.attach(MIMEText(text, "plain", "utf-8"))
     msg.attach(MIMEText(html, "html",  "utf-8"))
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
-        smtp.ehlo()
-        smtp.starttls()
-        smtp.login(settings.smtp_user, settings.smtp_password)
-        smtp.sendmail(settings.smtp_user, to, msg.as_string())
+    
+    # Use SMTP_SSL (port 465) instead of SMTP with STARTTLS (port 587)
+    # Railway blocks port 587, but 465 works
+    if settings.smtp_port == 465:
+        with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+            smtp.login(settings.smtp_user, settings.smtp_password)
+            smtp.sendmail(settings.smtp_user, to, msg.as_string())
+    else:
+        # Fallback to STARTTLS for port 587 (local dev)
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.login(settings.smtp_user, settings.smtp_password)
+            smtp.sendmail(settings.smtp_user, to, msg.as_string())
 
 
 async def send_email(to: str, subject: str, html: str, text: str = "") -> bool:
