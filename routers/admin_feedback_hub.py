@@ -59,7 +59,7 @@ async def get_feedback_stats(admin: CurrentAdmin):
     return {"total": total, "open": open_count, "by_status": by_status, "by_type": by_type}
 
 
-@router.get("")
+@router.get("/")
 async def list_feedback(
     admin: CurrentAdmin,
     status: Optional[str] = Query(None),

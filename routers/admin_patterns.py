@@ -54,7 +54,7 @@ async def _invalidate_pattern(pattern_id: str) -> None:
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 
-@router.get("")  # Changed from "/" to "" to avoid trailing slash issues
+@router.get("/")
 async def list_patterns(
     admin: CurrentAdmin,
     category: Optional[str] = None,
@@ -84,7 +84,7 @@ async def list_patterns(
     return {"patterns": patterns, "total": total, "page": page, "page_size": page_size}
 
 
-@router.post("")
+@router.post("/")
 async def create_pattern(body: dict, admin: CurrentAdmin):
     """Create a new pattern."""
     db = get_db()
