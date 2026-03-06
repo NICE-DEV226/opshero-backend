@@ -52,7 +52,7 @@ def _to_admin_user(doc: dict, total_analyses: int = 0) -> dict:
     }
 
 
-@router.get("/")
+@router.get("")  # Changed from "/" to "" to avoid trailing slash issues
 async def list_users(
     admin: CurrentAdmin,
     search: Optional[str] = None,

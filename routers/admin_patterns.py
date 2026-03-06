@@ -54,7 +54,7 @@ async def _invalidate_pattern(pattern_id: str) -> None:
 
 # ── Routes ─────────────────────────────────────────────────────────────────
 
-@router.get("/")
+@router.get("")  # Changed from "/" to "" to avoid trailing slash issues
 async def list_patterns(
     admin: CurrentAdmin,
     category: Optional[str] = None,

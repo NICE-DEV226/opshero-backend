@@ -230,6 +230,16 @@ app = FastAPI(
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
 
+# Custom middleware to handle trailing slashes without redirects
+@app.middleware("http")
+async def remove_trailing_slash_middleware(request: Request, call_next):
+    """Remove trailing slashes from URLs to avoid 307 redirects."""
+    if request.url.path != "/" and request.url.path.endswith("/"):
+        # Remove trailing slash and process
+        new_path = request.url.path.rstrip("/")
+        request.scope["path"] = new_path
+    return await call_next(request)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.allowed_origins,
