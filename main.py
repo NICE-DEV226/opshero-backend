@@ -230,18 +230,21 @@ app = FastAPI(
 
 # ── CORS ───────────────────────────────────────────────────────────────────────
 
-# Custom middleware to add trailing slashes to admin routes
+# Custom middleware to add trailing slashes to routes that need them
 @app.middleware("http")
 async def add_trailing_slash_middleware(request: Request, call_next):
-    """Add trailing slash to admin routes to match FastAPI router definitions."""
+    """Add trailing slash to routes to match FastAPI router definitions."""
     path = request.url.path
-    # Only for admin routes that don't have trailing slash and don't have path parameters
-    if path.startswith("/admin/") and not path.endswith("/") and "?" not in path:
-        # Check if it's a root route (no additional segments after prefix)
-        segments = path.rstrip("/").split("/")
-        # /admin/users, /admin/patterns, etc. (3 segments) need trailing slash
-        if len(segments) == 3:
-            request.scope["path"] = path + "/"
+    # Routes that need trailing slash (root routes with prefix)
+    needs_slash_routes = [
+        "/admin/users", "/admin/patterns", "/admin/announcements", 
+        "/admin/config", "/admin/contributions", "/admin/feedback",
+        "/announcements", "/patterns", "/feedback"
+    ]
+    
+    if not path.endswith("/") and path in needs_slash_routes:
+        request.scope["path"] = path + "/"
+    
     return await call_next(request)
 
 app.add_middleware(
