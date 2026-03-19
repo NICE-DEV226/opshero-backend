@@ -72,13 +72,30 @@ async def get_my_team(user: CurrentUser):
     member_ids = [m["user_id"] for m in team_doc.get("members", [])]
     total_analyses = await db.analyses.count_documents({"user_id": {"$in": member_ids}})
 
+    # Enrich invitations with user info
+    enriched_invitations = []
+    for inv in team_doc.get("invitations", []):
+        u = await db.users.find_one({"id": inv["user_id"]}, {"_id": 0})
+        if u:
+            enriched_invitations.append({
+                "user_id": inv["user_id"],
+                "github_login": inv["github_login"],
+                "github_avatar_url": u.get("github_avatar_url"),
+                "github_name": u.get("github_name"),
+                "role": inv["role"],
+                "token": inv["token"],
+                "created_at": inv["created_at"],
+                "expires_at": inv["expires_at"],
+            })
+
     return {
         "team": {
             **team_doc,
             "members": enriched,
+            "invitations": enriched_invitations,
             "member_count": len(enriched),
             "total_analyses": total_analyses,
-            "invitations_pending": len(team_doc.get("invitations", [])),
+            "invitations_pending": len(enriched_invitations),
         }
     }
 
@@ -176,6 +193,67 @@ class InviteRequest(BaseModel):
     role: str = "member"   # member | admin
 
 
+@router.get("/check-user/{github_login}")
+async def check_github_user(github_login: str, user: CurrentUser):
+    """Check if a GitHub user exists and is registered on OpsHero."""
+    db = get_db()
+    
+    # Clean the input
+    login = github_login.replace("@", "").strip().lower()
+    
+    # Check if user exists in our database
+    opshero_user = await db.users.find_one({"github_login": {"$regex": f"^{login}$", "$options": "i"}})
+    
+    if opshero_user:
+        return {
+            "exists": True,
+            "registered": True,
+            "github_login": opshero_user["github_login"],
+            "github_name": opshero_user.get("github_name"),
+            "github_avatar_url": opshero_user.get("github_avatar_url"),
+        }
+    
+    # If not in our DB, check GitHub API
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                f"https://api.github.com/users/{login}",
+                headers={"Accept": "application/vnd.github+json"}
+            )
+            
+            if response.status_code == 200:
+                gh_data = response.json()
+                return {
+                    "exists": True,
+                    "registered": False,
+                    "github_login": gh_data["login"],
+                    "github_name": gh_data.get("name"),
+                    "github_avatar_url": gh_data.get("avatar_url"),
+                }
+            elif response.status_code == 404:
+                return {
+                    "exists": False,
+                    "registered": False,
+                    "github_login": login,
+                }
+            else:
+                # GitHub API error, assume user might exist
+                return {
+                    "exists": None,  # Unknown
+                    "registered": False,
+                    "github_login": login,
+                    "error": "GitHub API unavailable"
+                }
+    except Exception:
+        return {
+            "exists": None,  # Unknown
+            "registered": False,
+            "github_login": login,
+            "error": "Network error"
+        }
+
+
 @router.post("/invite")
 async def invite_member(body: InviteRequest, user: CurrentUser):
     """Invite a GitHub user to the team."""
@@ -222,37 +300,67 @@ async def invite_member(body: InviteRequest, user: CurrentUser):
         {"$push": {"invitations": invitation}},
     )
 
+    # Create in-app notification instead of returning token
+    from routers.notifications import create_notification
+    await create_notification(
+        user_id=invitee["id"],
+        type="team_invite",
+        title=f"Team invitation from {team_doc['name']}",
+        message=f"{user.github_login} invited you to join {team_doc['name']} as {body.role}",
+        data={
+            "team_id": team_doc["id"],
+            "team_name": team_doc["name"],
+            "inviter_login": user.github_login,
+            "role": body.role,
+            "token": token
+        },
+        expires_at=datetime.utcnow() + timedelta(days=7)
+    )
+
     logger.info("Invited @%s to team %s", body.github_login, team_doc["id"])
-    return {"ok": True, "token": token, "expires_in_days": 7}
+    return {"ok": True, "message": f"Invitation sent to @{body.github_login}"}
 
 
 # ── POST /teams/invite/accept ─────────────────────────────────────────────────
 
 class AcceptInviteRequest(BaseModel):
-    token: str
+    notification_id: str  # Changed from token to notification_id
 
 
 @router.post("/invite/accept")
 async def accept_invite(body: AcceptInviteRequest, user: CurrentUser):
-    """Accept a team invitation using the invite token."""
+    """Accept a team invitation from notification."""
     db = get_db()
 
-    team_doc = await db.teams.find_one({"invitations.token": body.token}, {"_id": 0})
+    # Find the notification
+    notification = await db.notifications.find_one({
+        "id": body.notification_id,
+        "user_id": user.id,
+        "type": "team_invite",
+        "read": False
+    })
+    
+    if not notification:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found or already processed.")
+
+    if datetime.utcnow() > notification.get("expires_at", datetime.utcnow()):
+        raise HTTPException(status.HTTP_410_GONE, "Invitation has expired.")
+
+    token = notification["data"]["token"]
+    team_id = notification["data"]["team_id"]
+    role = notification["data"]["role"]
+
+    # Find the team and invitation
+    team_doc = await db.teams.find_one({"id": team_id}, {"_id": 0})
     if not team_doc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found or already used.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Team not found.")
 
     invitation = next(
-        (inv for inv in team_doc.get("invitations", []) if inv["token"] == body.token),
+        (inv for inv in team_doc.get("invitations", []) if inv["token"] == token),
         None,
     )
     if not invitation:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid invitation token.")
-
-    if datetime.utcnow() > invitation["expires_at"]:
-        raise HTTPException(status.HTTP_410_GONE, "Invitation has expired.")
-
-    if invitation["user_id"] != user.id:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "This invitation is for a different user.")
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invalid invitation.")
 
     # Check not already a member
     if any(m["user_id"] == user.id for m in team_doc.get("members", [])):
@@ -261,16 +369,16 @@ async def accept_invite(body: AcceptInviteRequest, user: CurrentUser):
     now = datetime.utcnow()
     new_member = {
         "user_id": user.id,
-        "role": invitation["role"],
+        "role": role,
         "joined_at": now,
     }
 
     # Add member, remove invitation
     await db.teams.update_one(
-        {"id": team_doc["id"]},
+        {"id": team_id},
         {
             "$push": {"members": new_member},
-            "$pull": {"invitations": {"token": body.token}},
+            "$pull": {"invitations": {"token": token}},
             "$set": {"updated_at": now},
         },
     )
@@ -278,11 +386,75 @@ async def accept_invite(body: AcceptInviteRequest, user: CurrentUser):
     # Update user
     await db.users.update_one(
         {"id": user.id},
-        {"$set": {"team_id": team_doc["id"], "team_role": invitation["role"]}},
+        {"$set": {"team_id": team_id, "team_role": role}},
     )
 
-    logger.info("User %s joined team %s", user.github_login, team_doc["id"])
-    return {"ok": True, "team_id": team_doc["id"], "team_name": team_doc["name"]}
+    # Mark notification as read
+    await db.notifications.update_one(
+        {"id": body.notification_id},
+        {"$set": {"read": True}}
+    )
+
+    # Notify team owner/admins
+    team_admins = [m["user_id"] for m in team_doc.get("members", []) if m["role"] in ("owner", "admin")]
+    for admin_id in team_admins:
+        if admin_id != user.id:  # Don't notify the person who just joined
+            from routers.notifications import create_notification
+            await create_notification(
+                user_id=admin_id,
+                type="team_member_joined",
+                title=f"{user.github_login} joined your team",
+                message=f"{user.github_login} accepted the invitation and joined {team_doc['name']}",
+                data={
+                    "team_id": team_id,
+                    "team_name": team_doc["name"],
+                    "new_member_login": user.github_login,
+                    "role": role
+                }
+            )
+
+    logger.info("User %s joined team %s", user.github_login, team_id)
+    return {"ok": True, "team_id": team_id, "team_name": team_doc["name"]}
+
+
+# ── DELETE /teams/invite/{token} ──────────────────────────────────────────────
+
+@router.delete("/invite/{token}")
+async def cancel_invite(token: str, user: CurrentUser):
+    """Cancel a team invitation. Owner or admin only."""
+    db = get_db()
+    team_doc = await _get_user_team(user.id, db)
+    if not team_doc:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "You are not in a team.")
+
+    my_role = next(
+        (m["role"] for m in team_doc["members"] if m["user_id"] == user.id),
+        None,
+    )
+    if my_role not in ("owner", "admin"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only owner or admin can cancel invitations.")
+
+    # Find and remove the invitation
+    invitation = next(
+        (inv for inv in team_doc.get("invitations", []) if inv["token"] == token),
+        None,
+    )
+    if not invitation:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found.")
+
+    await db.teams.update_one(
+        {"id": team_doc["id"]},
+        {"$pull": {"invitations": {"token": token}}},
+    )
+
+    # Cancel the notification
+    await db.notifications.delete_many({
+        "type": "team_invite",
+        "data.token": token
+    })
+
+    logger.info("Cancelled invitation for @%s from team %s", invitation["github_login"], team_doc["id"])
+    return {"ok": True}
 
 
 # ── DELETE /teams/members/{user_id} ──────────────────────────────────────────

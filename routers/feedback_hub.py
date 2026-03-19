@@ -78,6 +78,30 @@ async def submit_feedback(body: FeedbackSubmit, user: CurrentUser):
     }
 
     await db.feedback_hub.insert_one(doc)
+    
+    # Notify admins about new feedback (fire-and-forget)
+    try:
+        # Get admin user IDs (users with admin role)
+        admin_users = await db.users.find(
+            {"role": {"$in": ["admin", "super_admin"]}}, 
+            {"id": 1}
+        ).to_list(None)
+        
+        if admin_users:
+            from routers.notifications import create_new_feedback_notification
+            admin_ids = [admin["id"] for admin in admin_users]
+            await create_new_feedback_notification(
+                admin_user_ids=admin_ids,
+                feedback_title=body.title,
+                author_github=user.github_login,
+                feedback_id=doc["id"]
+            )
+    except Exception as e:
+        # Don't fail the feedback submission if notification fails
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Failed to notify admins about new feedback: {e}")
+    
     return {"id": doc["id"], "message": "Feedback submitted — thank you!"}
 
 

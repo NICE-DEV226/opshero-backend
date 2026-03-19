@@ -164,6 +164,15 @@ async def get_contribution(contribution_id: str, admin: CurrentAdmin):
 async def approve_contribution(contribution_id: str, body: ReviewRequest, admin: CurrentAdmin):
     """Mark contribution as approved — ready for promotion."""
     db = get_db()
+    
+    # Get the contribution to get author info
+    contribution = await db.community_contributions.find_one(
+        {"id": contribution_id}, 
+        {"_id": 0, "author_user_id": 1, "title": 1}
+    )
+    if not contribution:
+        raise HTTPException(404, "Contribution not found")
+    
     result = await db.community_contributions.update_one(
         {"id": contribution_id},
         {"$set": {
@@ -175,6 +184,18 @@ async def approve_contribution(contribution_id: str, body: ReviewRequest, admin:
     )
     if result.matched_count == 0:
         raise HTTPException(404, "Contribution not found")
+    
+    # Notify the author about approval
+    try:
+        from routers.notifications import create_pattern_approved_notification
+        await create_pattern_approved_notification(
+            user_id=contribution["author_user_id"],
+            pattern_name=contribution["title"],
+            pattern_id=contribution_id
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send approval notification: {e}")
+    
     return {"message": "Approved — call /promote to add the pattern to the live library"}
 
 
@@ -183,6 +204,15 @@ async def reject_contribution(contribution_id: str, body: ReviewRequest, admin: 
     db = get_db()
     if not body.reason:
         raise HTTPException(400, "Rejection reason is required")
+    
+    # Get the contribution to get author info
+    contribution = await db.community_contributions.find_one(
+        {"id": contribution_id}, 
+        {"_id": 0, "author_user_id": 1, "title": 1}
+    )
+    if not contribution:
+        raise HTTPException(404, "Contribution not found")
+    
     result = await db.community_contributions.update_one(
         {"id": contribution_id},
         {"$set": {
@@ -194,6 +224,18 @@ async def reject_contribution(contribution_id: str, body: ReviewRequest, admin: 
     )
     if result.matched_count == 0:
         raise HTTPException(404, "Contribution not found")
+    
+    # Notify the author about rejection
+    try:
+        from routers.notifications import create_pattern_rejected_notification
+        await create_pattern_rejected_notification(
+            user_id=contribution["author_user_id"],
+            pattern_name=contribution["title"],
+            reason=body.reason
+        )
+    except Exception as e:
+        logger.warning(f"Failed to send rejection notification: {e}")
+    
     return {"message": "Rejected"}
 
 

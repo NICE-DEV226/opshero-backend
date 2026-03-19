@@ -21,6 +21,7 @@ from models.analysis import (
     AnalysisListResponse,
 )
 from services.slack_notifier import send_slack_notification
+from routers.notifications import create_quota_warning_notification, create_quota_exhausted_notification
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/analyses", tags=["analyses"])
@@ -211,6 +212,7 @@ async def analyze_log(
     analysis = Analysis(
         user_id=user.id,
         client_id=body.client_id or None,  # None → excluded from sparse unique index
+        project_id=body.project_id,  # Include project_id for team context
         log_hash=result.log_hash,
         log_size_chars=result.log_size_chars,
         pattern_id=result.pattern_id,
@@ -231,6 +233,30 @@ async def analyze_log(
     analysis.set_log_ttl()
 
     await db.analyses.insert_one(analysis.model_dump())
+
+    # Update user's monthly analysis count and check quotas
+    await db.users.update_one(
+        {"id": user.id},
+        {"$inc": {"analyses_this_month": 1}}
+    )
+    
+    # Check quota and send notifications for free/pro tiers
+    if user.tier in ["free", "pro"]:
+        from models.user import TIER_LIMITS
+        limit = TIER_LIMITS[user.tier]["analyses_per_day"] * 30  # Rough monthly limit
+        new_count = user.analyses_this_month + 1
+        
+        # Send quota warning at 80%
+        if new_count == int(limit * 0.8):
+            asyncio.create_task(
+                create_quota_warning_notification(user.id, new_count, limit)
+            )
+        
+        # Send quota exhausted at 100%
+        elif new_count >= limit:
+            asyncio.create_task(
+                create_quota_exhausted_notification(user.id, limit)
+            )
 
     # Auto-learning: when the LLM identifies a NEW pattern (not in the regex library),
     # save it as a candidate for admin review and future promotion to regex library.
@@ -284,6 +310,7 @@ async def list_analyses(
     match_method: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     client_id: Optional[str] = Query(None),
+    project_id: Optional[str] = Query(None),
 ):
     """Return paginated analysis history for the current user."""
     db = get_db()
@@ -297,6 +324,8 @@ async def list_analyses(
         query["detected_category"] = category
     if client_id:
         query["client_id"] = client_id
+    if project_id:
+        query["project_id"] = project_id
 
     skip = (page - 1) * per_page
     total = await db.analyses.count_documents(query)

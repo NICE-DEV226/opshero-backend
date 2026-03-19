@@ -33,6 +33,7 @@ class Analysis(BaseModel):
     # Identity / dedup
     user_id: str
     client_id: Optional[str] = None  # UUID from CLI — used for idempotent sync
+    project_id: Optional[str] = None  # Project this analysis belongs to (team feature)
 
     # Log metadata (never store the raw log in prod beyond TTL)
     log_hash: str = ""
@@ -80,6 +81,7 @@ class Analysis(BaseModel):
 class AnalyzeRequest(BaseModel):
     log: str = Field(..., min_length=10, max_length=500_000, description="Raw CI/CD log")
     client_id: Optional[str] = Field(None, description="UUID from CLI for dedup")
+    project_id: Optional[str] = Field(None, description="Project ID for team context")
     context: Optional[dict] = Field(None, description="Extra context (OS, tool versions...)")
     metadata: Optional[dict] = Field(None, description="Additional metadata")
 

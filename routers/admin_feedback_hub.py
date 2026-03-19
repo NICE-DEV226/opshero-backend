@@ -7,6 +7,7 @@ DELETE /admin/feedback-hub/{id}      — Delete submission
 GET    /admin/feedback-hub/stats     — Aggregate counts by type/status
 """
 
+import logging
 from datetime import datetime
 from typing import Optional
 
@@ -16,6 +17,7 @@ from pydantic import BaseModel
 from database import get_db
 from deps.admin_auth import CurrentAdmin
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin/feedback-hub", tags=["admin-feedback-hub"])
 
 VALID_STATUSES = {"open", "in_review", "planned", "done", "declined"}
@@ -119,6 +121,11 @@ async def update_feedback(feedback_id: str, body: FeedbackUpdate, admin: Current
     if body.status and body.status not in VALID_STATUSES:
         raise HTTPException(400, f"Invalid status. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
 
+    # Get the original feedback to check for changes and get user info
+    original = await db.feedback_hub.find_one({"id": feedback_id}, {"_id": 0})
+    if not original:
+        raise HTTPException(404, "Feedback not found")
+
     updates: dict = {"updated_at": datetime.utcnow()}
     if body.status is not None:
         updates["status"] = body.status
@@ -130,6 +137,43 @@ async def update_feedback(feedback_id: str, body: FeedbackUpdate, admin: Current
     result = await db.feedback_hub.update_one({"id": feedback_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(404, "Feedback not found")
+
+    # Send notification to user if admin replied or status changed significantly
+    should_notify = False
+    notification_title = ""
+    notification_message = ""
+    
+    if body.admin_reply and body.admin_reply.strip():
+        should_notify = True
+        notification_title = f"Admin replied to your feedback: {original['title']}"
+        notification_message = f"An admin has responded to your feedback submission. Check your submissions to see the reply."
+    elif body.status and body.status != original.get("status"):
+        if body.status in ["planned", "done"]:
+            should_notify = True
+            status_labels = {
+                "planned": "planned for development",
+                "done": "completed"
+            }
+            notification_title = f"Your feedback has been {status_labels[body.status]}"
+            notification_message = f"Good news! Your feedback '{original['title']}' has been {status_labels[body.status]}."
+        elif body.status == "declined":
+            should_notify = True
+            notification_title = f"Update on your feedback: {original['title']}"
+            notification_message = f"Your feedback submission has been reviewed. Check your submissions for details."
+
+    if should_notify:
+        try:
+            from routers.notifications import create_feedback_reply_notification
+            await create_feedback_reply_notification(
+                user_id=original["author_user_id"],
+                feedback_title=original["title"],
+                admin_reply=body.admin_reply,
+                new_status=body.status,
+                feedback_id=feedback_id
+            )
+        except Exception as e:
+            # Don't fail the update if notification fails
+            logger.warning(f"Failed to send feedback notification to user {original['author_user_id']}: {e}")
 
     return {"message": "Updated"}
 

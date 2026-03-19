@@ -37,6 +37,7 @@ from routers import patterns as patterns_router
 from routers import sync as sync_router
 from routers import billing as billing_router
 from routers import teams as teams_router
+from routers import projects as projects_router
 from routers.analyses import set_analyzer
 from routers import admin_auth as admin_auth_router
 from routers import admin_dashboard as admin_dashboard_router
@@ -51,9 +52,11 @@ from routers import admin_billing as admin_billing_router
 from routers import admin_groq as admin_groq_router
 from routers import admin_feedback_hub as admin_feedback_hub_router
 from routers import admin_learning as admin_learning_router
+from routers import admin_notifications as admin_notifications_router
 from routers import github as github_router
 from routers import webhooks as webhooks_router
 from routers import integrations as integrations_router
+from routers import notifications as notifications_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -239,7 +242,7 @@ async def add_trailing_slash_middleware(request: Request, call_next):
     needs_slash_routes = [
         "/admin/users", "/admin/patterns", "/admin/announcements", 
         "/admin/config", "/admin/contributions", "/admin/feedback",
-        "/announcements", "/patterns", "/feedback"
+        "/announcements", "/patterns", "/feedback", "/notifications"
     ]
     
     if not path.endswith("/") and path in needs_slash_routes:
@@ -280,6 +283,8 @@ app.include_router(patterns_router.router)
 app.include_router(sync_router.router)
 app.include_router(billing_router.router)
 app.include_router(teams_router.router)
+app.include_router(projects_router.router)
+app.include_router(notifications_router.router)
 app.include_router(integrations_router.router)
 
 # ── Admin routes (/admin/*) — completely separate from user routes ──────────
@@ -296,6 +301,7 @@ app.include_router(admin_billing_router.router)
 app.include_router(admin_groq_router.router)
 app.include_router(admin_feedback_hub_router.router)
 app.include_router(admin_learning_router.router)
+app.include_router(admin_notifications_router.router)
 
 
 # ── Health / liveness probes ───────────────────────────────────────────────────

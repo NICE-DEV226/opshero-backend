@@ -363,18 +363,19 @@ async def generate_pattern_for_candidate(candidate_id: str, admin: SuperAdmin):
 
     now = datetime.utcnow()
 
-    if not result.success:
+    if not result or not result.success:
+        error_msg = result.error if result else "Pattern generation failed"
         return {
             "success": False,
-            "error": result.error,
-            "model": result.model,
-            "latency_ms": result.latency_ms,
+            "error": error_msg,
+            "model": result.model if result else None,
+            "latency_ms": result.latency_ms if result else 0,
         }
 
     # Persist the generated pattern_data back to the candidate document
     updates: dict = {
-        "pattern_data": result.pattern_data,
-        "validation_errors": result.validation_errors,
+        "pattern_data": result.pattern_data if result.pattern_data else {},
+        "validation_errors": result.validation_errors or [],
         "generation_model": result.model,
         "generation_latency_ms": result.latency_ms,
         "last_generation_at": now,
@@ -389,12 +390,12 @@ async def generate_pattern_for_candidate(candidate_id: str, admin: SuperAdmin):
 
     return {
         "success": True,
-        "pattern_data": result.pattern_data,
-        "validation_errors": result.validation_errors,
-        "is_valid": result.is_valid,
+        "pattern_data": result.pattern_data if result.pattern_data else {},
+        "validation_errors": result.validation_errors or [],
+        "is_valid": result.is_valid if hasattr(result, 'is_valid') else False,
         "model": result.model,
-        "input_tokens": result.input_tokens,
-        "output_tokens": result.output_tokens,
+        "input_tokens": result.input_tokens if hasattr(result, 'input_tokens') else 0,
+        "output_tokens": result.output_tokens if hasattr(result, 'output_tokens') else 0,
         "latency_ms": result.latency_ms,
     }
 
@@ -414,7 +415,8 @@ async def validate_regex_for_candidate(candidate_id: str, admin: CurrentAdmin):
         raise HTTPException(404, "Candidate not found")
 
     pattern_data = candidate.get("pattern_data") or {}
-    regex_str = pattern_data.get("detection", {}).get("regex", "")
+    detection = pattern_data.get("detection") or {}
+    regex_str = detection.get("regex", "")
     if not regex_str:
         raise HTTPException(422, "Candidate has no regex in pattern_data.detection.regex")
 
